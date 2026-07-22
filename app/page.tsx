@@ -7,6 +7,15 @@ import {
   useState,
 } from "react";
 
+export type ChatEntry = {
+  id: string;
+  role: "user" | "assistant";
+  text?: string;
+  images?: string[]; // preview URLs
+  resultImage?: string; // generated image URL
+  isGenerating?: boolean;
+};
+
 type UploadedImage = {
   id: string;
   file: File;
@@ -45,7 +54,7 @@ const SESSION_STORAGE_KEY =
 const IMAGE_DB_NAME =
   "ai-interior-designer";
 
-const IMAGE_STORE_NAME =
+const HISTORY_STORE_NAME =
   "latest-images";
 
 function openImageDatabase(): Promise<IDBDatabase> {
@@ -60,11 +69,11 @@ function openImageDatabase(): Promise<IDBDatabase> {
 
       if (
         !database.objectStoreNames.contains(
-          IMAGE_STORE_NAME,
+          HISTORY_STORE_NAME,
         )
       ) {
         database.createObjectStore(
-          IMAGE_STORE_NAME,
+          HISTORY_STORE_NAME,
         );
       }
     };
@@ -82,14 +91,14 @@ function openImageDatabase(): Promise<IDBDatabase> {
   });
 }
 
-async function saveSessionImage(
+async function saveSessionHistory(
   sessionId: string,
-  image: string,
+  history: ChatEntry[],
 ): Promise<void> {
   if (
     typeof window === "undefined" ||
     !sessionId ||
-    !image
+    !history
   ) {
     return;
   }
@@ -99,20 +108,20 @@ async function saveSessionImage(
 
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(
-      IMAGE_STORE_NAME,
+      HISTORY_STORE_NAME,
       "readwrite",
     );
 
     transaction.objectStore(
-      IMAGE_STORE_NAME,
-    ).put(image, sessionId);
+      HISTORY_STORE_NAME,
+    ).put(history, sessionId);
 
     transaction.oncomplete = () => resolve();
     transaction.onerror = () =>
       reject(
         transaction.error ??
         new Error(
-          "ไม่สามารถบันทึกรูปล่าสุดได้",
+          "ไม่สามารถบันทึกประวัติล่าสุดได้",
         ),
       );
   });
@@ -120,9 +129,9 @@ async function saveSessionImage(
   database.close();
 }
 
-async function loadSessionImage(
+async function loadSessionHistory(
   sessionId: string,
-): Promise<string | null> {
+): Promise<ChatEntry[] | null> {
   if (
     typeof window === "undefined" ||
     !sessionId
@@ -133,15 +142,15 @@ async function loadSessionImage(
   const database =
     await openImageDatabase();
 
-  const image = await new Promise<unknown>(
+  const history = await new Promise<unknown>(
     (resolve, reject) => {
       const transaction = database.transaction(
-        IMAGE_STORE_NAME,
+        HISTORY_STORE_NAME,
         "readonly",
       );
 
       const request = transaction
-        .objectStore(IMAGE_STORE_NAME)
+        .objectStore(HISTORY_STORE_NAME)
         .get(sessionId);
 
       request.onsuccess = () =>
@@ -151,7 +160,7 @@ async function loadSessionImage(
         reject(
           request.error ??
           new Error(
-            "ไม่สามารถอ่านรูปล่าสุดได้",
+            "ไม่สามารถอ่านประวัติล่าสุดได้",
           ),
         );
     },
@@ -159,12 +168,10 @@ async function loadSessionImage(
 
   database.close();
 
-  return typeof image === "string" && image
-    ? image
-    : null;
+  return Array.isArray(history) ? history : null;
 }
 
-async function deleteSessionImage(
+async function deleteSessionHistory(
   sessionId: string,
 ): Promise<void> {
   if (
@@ -179,12 +186,12 @@ async function deleteSessionImage(
 
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(
-      IMAGE_STORE_NAME,
+      HISTORY_STORE_NAME,
       "readwrite",
     );
 
     transaction.objectStore(
-      IMAGE_STORE_NAME,
+      HISTORY_STORE_NAME,
     ).delete(sessionId);
 
     transaction.oncomplete = () => resolve();
@@ -228,8 +235,8 @@ export default function HomePage() {
     setProgressMessage,
   ] = useState("");
 
-  const [resultImage, setResultImage] =
-    useState<string | null>(null);
+  const [chatHistory, setChatHistory] =
+    useState<ChatEntry[]>([]);
 
   const [error, setError] =
     useState("");
@@ -244,20 +251,20 @@ export default function HomePage() {
       setSessionId(activeSessionId);
 
       try {
-        const savedImage =
-          await loadSessionImage(
+        const savedHistory =
+          await loadSessionHistory(
             activeSessionId,
           );
 
         if (
           !cancelled &&
-          savedImage
+          savedHistory
         ) {
-          setResultImage(savedImage);
+          setChatHistory(savedHistory);
         }
       } catch (restoreError) {
         console.error(
-          "Restore previous image error:",
+          "Restore previous history error:",
           restoreError,
         );
       }
@@ -288,7 +295,7 @@ export default function HomePage() {
       images.length > 0;
 
     const hasPreviousImage =
-      Boolean(resultImage);
+      chatHistory.some((entry) => Boolean(entry.resultImage));
 
     /*
       ถ้ามีภาพผลลัพธ์จากรอบก่อนแล้ว
@@ -311,7 +318,7 @@ export default function HomePage() {
   }, [
     images,
     message,
-    resultImage,
+    chatHistory,
   ]);
 
   function getOrCreateSessionId(): string {
@@ -357,7 +364,7 @@ export default function HomePage() {
 
     if (previousSessionId) {
       try {
-        await deleteSessionImage(
+        await deleteSessionHistory(
           previousSessionId,
         );
       } catch (deleteError) {
@@ -379,7 +386,7 @@ export default function HomePage() {
     setSessionId(newSessionId);
     setImages([]);
     setMessage("");
-    setResultImage(null);
+    setChatHistory([]);
     setProgressMessage("");
     setError("");
   }
@@ -906,11 +913,12 @@ export default function HomePage() {
       ห้าม setResultImage(null)
       เพราะต้องใช้แก้ไขรอบต่อไป
     */
+    const lastAiEntry = [...chatHistory].reverse().find(e => e.role === "assistant" && e.resultImage);
     const previousImage =
-      resultImage ??
-      (await loadSessionImage(
+      lastAiEntry?.resultImage ??
+      (await loadSessionHistory(
         activeSessionId,
-      ).catch(() => null)) ??
+      ).catch(() => null))?.reverse().find(e => e.role === "assistant" && e.resultImage)?.resultImage ??
       "";
 
     setSessionId(
@@ -978,6 +986,23 @@ export default function HomePage() {
       setProgressMessage(
         "กำลังส่งข้อมูลเข้า Workflow...",
       );
+      
+      const userEntry: ChatEntry = {
+        id: crypto.randomUUID(),
+        role: "user",
+        text: message.trim(),
+        images: images.map(img => img.previewUrl),
+      };
+      
+      const aiGeneratingEntry: ChatEntry = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        isGenerating: true,
+      };
+
+      setChatHistory(prev => [...prev, userEntry, aiGeneratingEntry]);
+      
+      
 
       const response =
         await fetch(
@@ -1122,14 +1147,32 @@ export default function HomePage() {
         );
       }
 
-      setResultImage(
-        generatedImage,
-      );
+      setChatHistory(prev => {
+        const newHistory = [...prev];
+        const lastIndex = newHistory.length - 1;
+        if (lastIndex >= 0 && newHistory[lastIndex].role === "assistant") {
+          newHistory[lastIndex] = {
+            ...newHistory[lastIndex],
+            isGenerating: false,
+            resultImage: generatedImage,
+          };
+        }
+        return newHistory;
+      });
 
       try {
-        await saveSessionImage(
+        // Note: We need to save the updated history, but setChatHistory is async.
+        // We will build the new history array to save immediately.
+        const newHistoryToSave = [...chatHistory, userEntry, {
+          id: aiGeneratingEntry.id,
+          role: "assistant",
+          isGenerating: false,
+          resultImage: generatedImage,
+        } as ChatEntry];
+        
+        await saveSessionHistory(
           activeSessionId,
-          generatedImage,
+          newHistoryToSave,
         );
       } catch (saveError) {
         console.error(
@@ -1272,7 +1315,7 @@ export default function HomePage() {
               </label>
             </div>
 
-            {!resultImage && (
+            {chatHistory.length === 0 && (
               <p className="mt-2 text-xs leading-5 text-slate-500">
                 การเริ่มห้องใหม่ต้องอัปโหลดอย่างน้อย
                 2 รูป:
@@ -1370,12 +1413,20 @@ export default function HomePage() {
                       .value,
                   )
                 }
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (canGenerate && !isGenerating) {
+                      handleGenerate();
+                    }
+                  }
+                }}
                 rows={6}
                 placeholder="ตัวอย่าง: สร้างห้องนั่งเล่นสไตล์ Modern Luxury และวางโซฟาชิดผนังด้านตะวันตก"
                 className="mt-2 w-full resize-none rounded-2xl border border-slate-300 px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100"
               />
 
-              {resultImage && (
+              {chatHistory.length > 0 && (
                 <p className="mt-2 text-xs leading-5 text-slate-500">
                   สามารถพิมพ์คำสั่งใหม่
                   หรืออัปโหลดเฟอร์นิเจอร์เพิ่ม
@@ -1406,76 +1457,86 @@ export default function HomePage() {
               {isGenerating
                 ? progressMessage ||
                 "กำลังสร้างภาพ..."
-                : resultImage
+                : chatHistory.length > 0
                   ? "แก้ไขการออกแบบ"
                   : "สร้างการออกแบบ"}
             </button>
           </section>
 
-          <section className="flex min-h-[620px] flex-col rounded-3xl bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-4">
+          <section className="flex min-h-[620px] max-h-[85vh] flex-col rounded-3xl bg-white p-5 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between gap-4 shrink-0 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-semibold text-slate-900">
-                  ผลลัพธ์
+                  ประวัติการแชท
                 </h2>
-
                 <p className="mt-1 text-sm text-slate-500">
-                  ภาพ Top View
-                  และ Front View
-                  จะแสดงตรงนี้
+                  ประวัติคำสั่งและภาพผลลัพธ์
                 </p>
               </div>
-
-              {resultImage && (
-                <a
-                  href={
-                    resultImage
-                  }
-                  download="interior-design.png"
-                  className="shrink-0 rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  ดาวน์โหลด
-                </a>
-              )}
             </div>
 
-            <div className="mt-5 flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-              {isGenerating ? (
-                <div className="px-6 text-center">
-                  <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
-
-                  <p className="mt-4 font-medium text-slate-700">
-                    {progressMessage ||
-                      "AI กำลังออกแบบห้อง"}
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    ขั้นตอนนี้อาจใช้เวลาสักครู่
-                  </p>
+            <div className="flex-1 overflow-y-auto mt-4 pr-2 flex flex-col gap-6 scroll-smooth">
+              {chatHistory.length === 0 ? (
+                <div className="flex h-full items-center justify-center">
+                  <div className="max-w-sm px-6 text-center">
+                    <span className="text-6xl">🏠</span>
+                    <p className="mt-4 font-semibold text-slate-700">ยังไม่มีประวัติการออกแบบ</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      เพิ่มรูปและคำสั่งทางด้านซ้าย จากนั้นกดสร้างการออกแบบ
+                    </p>
+                  </div>
                 </div>
-              ) : resultImage ? (
-                <img
-                  src={
-                    resultImage
-                  }
-                  alt="Generated interior design"
-                  className="h-full max-h-[750px] w-full object-contain"
-                />
               ) : (
-                <div className="max-w-sm px-6 text-center">
-                  <span className="text-6xl">
-                    🏠
-                  </span>
+                chatHistory.map((entry) => (
+                  <div key={entry.id} className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[85%] rounded-2xl p-4 ${entry.role === "user" ? "bg-indigo-50 rounded-tr-sm" : "bg-white border border-slate-200 shadow-sm rounded-tl-sm"}`}>
+                      
+                      {entry.role === "assistant" && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-lg">🤖</span>
+                          <span className="font-semibold text-slate-700 text-sm">AI Designer</span>
+                        </div>
+                      )}
+                      
+                      {entry.role === "user" && entry.text && (
+                        <p className="text-slate-800 whitespace-pre-wrap">{entry.text}</p>
+                      )}
+                      
+                      {entry.role === "user" && entry.images && entry.images.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {entry.images.map((img, i) => (
+                            <img key={i} src={img} alt="reference" className="h-20 w-20 object-cover rounded-lg border border-slate-200" />
+                          ))}
+                        </div>
+                      )}
 
-                  <p className="mt-4 font-semibold text-slate-700">
-                    ยังไม่มีภาพผลลัพธ์
-                  </p>
+                      {entry.role === "assistant" && entry.isGenerating && (
+                        <div className="flex flex-col items-center justify-center py-8">
+                          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
+                          <p className="mt-4 font-medium text-slate-600 text-sm">
+                            {progressMessage || "AI กำลังออกแบบห้อง..."}
+                          </p>
+                        </div>
+                      )}
 
-                  <p className="mt-2 text-sm leading-6 text-slate-500">
-                    เพิ่มรูปและคำสั่งทางด้านซ้าย
-                    จากนั้นกดสร้างการออกแบบ
-                  </p>
-                </div>
+                      {entry.role === "assistant" && entry.resultImage && (
+                        <div className="mt-2">
+                          <img src={entry.resultImage} alt="result" className="w-full max-w-full object-contain rounded-lg max-h-[750px]" />
+                          <div className="mt-3 flex justify-end">
+                            <a
+                              href={entry.resultImage}
+                              download="interior-design.png"
+                              className="text-xs font-medium text-indigo-600 hover:text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg"
+                            >
+                              ↓ ดาวน์โหลดภาพ
+                            </a>
+                          </div>
+                        </div>
+                      )}
+                      
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </section>
