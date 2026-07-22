@@ -7,10 +7,6 @@ import {
   useState,
 } from "react";
 
-// ==================================================
-// TYPES
-// ==================================================
-
 type UploadedImage = {
   id: string;
   file: File;
@@ -43,53 +39,24 @@ type GenerateApiResponse = {
   details?: unknown;
 };
 
-// ==================================================
-// CONSTANTS
-// ==================================================
-
 const SESSION_STORAGE_KEY =
   "ai-interior-session-id";
 
 const IMAGE_DB_NAME =
-  "ai-interior-designer-db";
+  "ai-interior-designer";
 
 const IMAGE_STORE_NAME =
-  "session-images";
-
-const MAX_FILE_SIZE =
-  10 * 1024 * 1024;
-
-const ALLOWED_IMAGE_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
-
-// ==================================================
-// INDEXEDDB HELPERS
-// ==================================================
+  "latest-images";
 
 function openImageDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    if (typeof window === "undefined") {
-      reject(
-        new Error(
-          "IndexedDB ใช้งานได้เฉพาะใน Browser",
-        ),
-      );
-
-      return;
-    }
-
-    const request =
-      window.indexedDB.open(
-        IMAGE_DB_NAME,
-        1,
-      );
+    const request = indexedDB.open(
+      IMAGE_DB_NAME,
+      1,
+    );
 
     request.onupgradeneeded = () => {
-      const database =
-        request.result;
+      const database = request.result;
 
       if (
         !database.objectStoreNames.contains(
@@ -102,26 +69,16 @@ function openImageDatabase(): Promise<IDBDatabase> {
       }
     };
 
-    request.onsuccess = () => {
+    request.onsuccess = () =>
       resolve(request.result);
-    };
 
-    request.onerror = () => {
+    request.onerror = () =>
       reject(
         request.error ??
         new Error(
-          "ไม่สามารถเปิดฐานข้อมูลรูปภาพได้",
+          "ไม่สามารถเปิดฐานข้อมูลรูปในเบราว์เซอร์ได้",
         ),
       );
-    };
-
-    request.onblocked = () => {
-      reject(
-        new Error(
-          "ฐานข้อมูลรูปภาพถูกใช้งานอยู่ในแท็บอื่น กรุณาปิดแท็บเก่าแล้วลองใหม่",
-        ),
-      );
-    };
   });
 }
 
@@ -130,8 +87,9 @@ async function saveSessionImage(
   image: string,
 ): Promise<void> {
   if (
-    !sessionId.trim() ||
-    !image.trim()
+    typeof window === "undefined" ||
+    !sessionId ||
+    !image
   ) {
     return;
   }
@@ -139,176 +97,122 @@ async function saveSessionImage(
   const database =
     await openImageDatabase();
 
-  try {
-    await new Promise<void>(
-      (resolve, reject) => {
-        const transaction =
-          database.transaction(
-            IMAGE_STORE_NAME,
-            "readwrite",
-          );
-
-        const store =
-          transaction.objectStore(
-            IMAGE_STORE_NAME,
-          );
-
-        store.put(
-          image,
-          sessionId,
-        );
-
-        transaction.oncomplete =
-          () => {
-            resolve();
-          };
-
-        transaction.onerror = () => {
-          reject(
-            transaction.error ??
-            new Error(
-              "ไม่สามารถบันทึกรูปล่าสุดได้",
-            ),
-          );
-        };
-
-        transaction.onabort = () => {
-          reject(
-            transaction.error ??
-            new Error(
-              "การบันทึกรูปล่าสุดถูกยกเลิก",
-            ),
-          );
-        };
-      },
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(
+      IMAGE_STORE_NAME,
+      "readwrite",
     );
-  } finally {
-    database.close();
-  }
+
+    transaction.objectStore(
+      IMAGE_STORE_NAME,
+    ).put(image, sessionId);
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(
+        transaction.error ??
+        new Error(
+          "ไม่สามารถบันทึกรูปล่าสุดได้",
+        ),
+      );
+  });
+
+  database.close();
 }
 
 async function loadSessionImage(
   sessionId: string,
 ): Promise<string | null> {
-  if (!sessionId.trim()) {
+  if (
+    typeof window === "undefined" ||
+    !sessionId
+  ) {
     return null;
   }
 
   const database =
     await openImageDatabase();
 
-  try {
-    const result =
-      await new Promise<unknown>(
-        (resolve, reject) => {
-          const transaction =
-            database.transaction(
-              IMAGE_STORE_NAME,
-              "readonly",
-            );
-
-          const store =
-            transaction.objectStore(
-              IMAGE_STORE_NAME,
-            );
-
-          const request =
-            store.get(sessionId);
-
-          request.onsuccess = () => {
-            resolve(
-              request.result,
-            );
-          };
-
-          request.onerror = () => {
-            reject(
-              request.error ??
-              new Error(
-                "ไม่สามารถอ่านรูปล่าสุดได้",
-              ),
-            );
-          };
-        },
+  const image = await new Promise<unknown>(
+    (resolve, reject) => {
+      const transaction = database.transaction(
+        IMAGE_STORE_NAME,
+        "readonly",
       );
 
-    if (
-      typeof result === "string" &&
-      result.trim().length > 0
-    ) {
-      return result;
-    }
+      const request = transaction
+        .objectStore(IMAGE_STORE_NAME)
+        .get(sessionId);
 
-    return null;
-  } finally {
-    database.close();
-  }
+      request.onsuccess = () =>
+        resolve(request.result);
+
+      request.onerror = () =>
+        reject(
+          request.error ??
+          new Error(
+            "ไม่สามารถอ่านรูปล่าสุดได้",
+          ),
+        );
+    },
+  );
+
+  database.close();
+
+  return typeof image === "string" && image
+    ? image
+    : null;
 }
 
 async function deleteSessionImage(
   sessionId: string,
 ): Promise<void> {
-  if (!sessionId.trim()) {
+  if (
+    typeof window === "undefined" ||
+    !sessionId
+  ) {
     return;
   }
 
   const database =
     await openImageDatabase();
 
-  try {
-    await new Promise<void>(
-      (resolve, reject) => {
-        const transaction =
-          database.transaction(
-            IMAGE_STORE_NAME,
-            "readwrite",
-          );
-
-        const store =
-          transaction.objectStore(
-            IMAGE_STORE_NAME,
-          );
-
-        store.delete(sessionId);
-
-        transaction.oncomplete =
-          () => {
-            resolve();
-          };
-
-        transaction.onerror = () => {
-          reject(
-            transaction.error ??
-            new Error(
-              "ไม่สามารถล้างรูปล่าสุดได้",
-            ),
-          );
-        };
-
-        transaction.onabort = () => {
-          reject(
-            transaction.error ??
-            new Error(
-              "การล้างรูปล่าสุดถูกยกเลิก",
-            ),
-          );
-        };
-      },
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(
+      IMAGE_STORE_NAME,
+      "readwrite",
     );
-  } finally {
-    database.close();
-  }
+
+    transaction.objectStore(
+      IMAGE_STORE_NAME,
+    ).delete(sessionId);
+
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () =>
+      reject(
+        transaction.error ??
+        new Error(
+          "ไม่สามารถล้างรูปล่าสุดได้",
+        ),
+      );
+  });
+
+  database.close();
 }
 
-// ==================================================
-// PAGE COMPONENT
-// ==================================================
+const MAX_FILE_SIZE =
+  10 * 1024 * 1024;
+
+const ALLOWED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];
 
 export default function HomePage() {
-  const [images, setImages] =
-    useState<UploadedImage[]>(
-      [],
-    );
+  const [images, setImages] = useState<
+    UploadedImage[]
+  >([]);
 
   const [message, setMessage] =
     useState("");
@@ -316,49 +220,28 @@ export default function HomePage() {
   const [sessionId, setSessionId] =
     useState("");
 
-  const [
-    isSessionLoading,
-    setIsSessionLoading,
-  ] = useState(true);
-
-  const [
-    isGenerating,
-    setIsGenerating,
-  ] = useState(false);
+  const [isGenerating, setIsGenerating] =
+    useState(false);
 
   const [
     progressMessage,
     setProgressMessage,
   ] = useState("");
 
-  const [
-    resultImage,
-    setResultImage,
-  ] = useState<
-    string | null
-  >(null);
+  const [resultImage, setResultImage] =
+    useState<string | null>(null);
 
   const [error, setError] =
     useState("");
-
-  // ==================================================
-  // RESTORE SESSION AND PREVIOUS IMAGE
-  // ==================================================
 
   useEffect(() => {
     let cancelled = false;
 
     async function restoreSession() {
-      setIsSessionLoading(true);
-
       const activeSessionId =
         getOrCreateSessionId();
 
-      if (!cancelled) {
-        setSessionId(
-          activeSessionId,
-        );
-      }
+      setSessionId(activeSessionId);
 
       try {
         const savedImage =
@@ -370,32 +253,13 @@ export default function HomePage() {
           !cancelled &&
           savedImage
         ) {
-          setResultImage(
-            savedImage,
-          );
-
-          console.log(
-            "[browser] Previous image restored",
-            {
-              sessionId:
-                activeSessionId,
-
-              imageLength:
-                savedImage.length,
-            },
-          );
+          setResultImage(savedImage);
         }
       } catch (restoreError) {
         console.error(
-          "[browser] Restore previous image error",
+          "Restore previous image error:",
           restoreError,
         );
-      } finally {
-        if (!cancelled) {
-          setIsSessionLoading(
-            false,
-          );
-        }
       }
     }
 
@@ -406,87 +270,53 @@ export default function HomePage() {
     };
   }, []);
 
-  // ==================================================
-  // CLEANUP PREVIEW URLS
-  // ==================================================
-
   useEffect(() => {
     return () => {
-      images.forEach(
-        (image) => {
-          URL.revokeObjectURL(
-            image.previewUrl,
-          );
-        },
-      );
+      images.forEach((image) => {
+        URL.revokeObjectURL(
+          image.previewUrl,
+        );
+      });
     };
   }, [images]);
 
-  // ==================================================
-  // GENERATE BUTTON STATUS
-  // ==================================================
+  const canGenerate = useMemo(() => {
+    const hasMessage =
+      message.trim().length > 0;
 
-  const canGenerate =
-    useMemo(() => {
-      if (
-        isSessionLoading ||
-        isGenerating
-      ) {
-        return false;
-      }
+    const hasNewImages =
+      images.length > 0;
 
-      const hasMessage =
-        message.trim().length >
-        0;
+    const hasPreviousImage =
+      Boolean(resultImage);
 
-      const hasNewImages =
-        images.length > 0;
-
-      const hasPreviousImage =
-        Boolean(resultImage);
-
-      /*
-        ถ้ามีภาพผลลัพธ์จากรอบก่อนแล้ว:
-
-        1. พิมพ์ข้อความแก้ไขอย่างเดียวได้
-        2. อัปโหลดรูปเฟอร์นิเจอร์เพิ่มได้
-        3. ส่งทั้งข้อความและรูปใหม่ได้
-      */
-      if (hasPreviousImage) {
-        return (
-          hasMessage ||
-          hasNewImages
-        );
-      }
-
-      /*
-        เริ่มงานใหม่:
-
-        รูปแรก =
-        ห้องหรือแบบแปลน
-
-        รูปถัดไป =
-        เฟอร์นิเจอร์
-      */
+    /*
+      ถ้ามีภาพผลลัพธ์จากรอบก่อนแล้ว
+      สามารถแก้ด้วยข้อความอย่างเดียว
+      หรือเพิ่มรูปเฟอร์นิเจอร์ใหม่ได้
+    */
+    if (hasPreviousImage) {
       return (
-        images.length >= 2
+        hasMessage ||
+        hasNewImages
       );
-    }, [
-      images,
-      message,
-      resultImage,
-      isGenerating,
-      isSessionLoading,
-    ]);
+    }
 
-  // ==================================================
-  // SESSION HELPERS
-  // ==================================================
+    /*
+      เริ่มงานใหม่:
+      รูปแรก = ห้องหรือแบบแปลน
+      รูปถัดไป = เฟอร์นิเจอร์
+    */
+    return images.length >= 2;
+  }, [
+    images,
+    message,
+    resultImage,
+  ]);
 
   function getOrCreateSessionId(): string {
     if (
-      typeof window ===
-      "undefined"
+      typeof window === "undefined"
     ) {
       return "";
     }
@@ -516,25 +346,23 @@ export default function HomePage() {
       return;
     }
 
-    const oldSessionId =
+    const previousSessionId =
       sessionId;
 
-    images.forEach(
-      (image) => {
-        URL.revokeObjectURL(
-          image.previewUrl,
-        );
-      },
-    );
+    images.forEach((image) => {
+      URL.revokeObjectURL(
+        image.previewUrl,
+      );
+    });
 
-    if (oldSessionId) {
+    if (previousSessionId) {
       try {
         await deleteSessionImage(
-          oldSessionId,
+          previousSessionId,
         );
       } catch (deleteError) {
         console.error(
-          "[browser] Delete old session image error",
+          "Delete previous session image error:",
           deleteError,
         );
       }
@@ -548,43 +376,26 @@ export default function HomePage() {
       newSessionId,
     );
 
-    setSessionId(
-      newSessionId,
-    );
-
+    setSessionId(newSessionId);
     setImages([]);
     setMessage("");
     setResultImage(null);
     setProgressMessage("");
     setError("");
-
-    console.log(
-      "[browser] New session created",
-      {
-        oldSessionId,
-        newSessionId,
-      },
-    );
   }
-
-  // ==================================================
-  // FILE HANDLING
-  // ==================================================
 
   function handleFilesChange(
     event: ChangeEvent<HTMLInputElement>,
   ) {
     const selectedFiles =
       Array.from(
-        event.target.files ??
-        [],
+        event.target.files ?? [],
       );
 
     event.target.value = "";
 
     if (
-      selectedFiles.length ===
-      0
+      selectedFiles.length === 0
     ) {
       return;
     }
@@ -619,54 +430,41 @@ export default function HomePage() {
       setError("");
     }
 
-    const newImages:
-      UploadedImage[] =
-      validFiles.map(
-        (file) => ({
-          id: crypto.randomUUID(),
+    const newImages: UploadedImage[] =
+      validFiles.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl:
+          URL.createObjectURL(file),
+      }));
 
-          file,
-
-          previewUrl:
-            URL.createObjectURL(
-              file,
-            ),
-        }),
-      );
-
-    setImages(
-      (currentImages) => [
-        ...currentImages,
-        ...newImages,
-      ],
-    );
+    setImages((currentImages) => [
+      ...currentImages,
+      ...newImages,
+    ]);
   }
 
   function removeImage(
     imageId: string,
   ) {
-    setImages(
-      (currentImages) => {
-        const selectedImage =
-          currentImages.find(
-            (image) =>
-              image.id ===
-              imageId,
-          );
-
-        if (selectedImage) {
-          URL.revokeObjectURL(
-            selectedImage.previewUrl,
-          );
-        }
-
-        return currentImages.filter(
+    setImages((currentImages) => {
+      const selectedImage =
+        currentImages.find(
           (image) =>
-            image.id !==
-            imageId,
+            image.id === imageId,
         );
-      },
-    );
+
+      if (selectedImage) {
+        URL.revokeObjectURL(
+          selectedImage.previewUrl,
+        );
+      }
+
+      return currentImages.filter(
+        (image) =>
+          image.id !== imageId,
+      );
+    });
   }
 
   function fileToDataUrl(
@@ -691,9 +489,7 @@ export default function HomePage() {
             return;
           }
 
-          resolve(
-            reader.result,
-          );
+          resolve(reader.result);
         };
 
         reader.onerror = () => {
@@ -704,36 +500,22 @@ export default function HomePage() {
           );
         };
 
-        reader.readAsDataURL(
-          file,
-        );
+        reader.readAsDataURL(file);
       },
     );
   }
 
-  // ==================================================
-  // IMAGE RESPONSE HELPERS
-  // ==================================================
-
   function detectBase64MimeType(
     base64: string,
   ): string | null {
-    const cleanBase64 =
-      base64.replace(
-        /\s/g,
-        "",
-      );
-
     if (
-      cleanBase64.startsWith(
-        "/9j/",
-      )
+      base64.startsWith("/9j/")
     ) {
       return "image/jpeg";
     }
 
     if (
-      cleanBase64.startsWith(
+      base64.startsWith(
         "iVBORw0KGgo",
       )
     ) {
@@ -741,17 +523,13 @@ export default function HomePage() {
     }
 
     if (
-      cleanBase64.startsWith(
-        "UklGR",
-      )
+      base64.startsWith("UklGR")
     ) {
       return "image/webp";
     }
 
     if (
-      cleanBase64.startsWith(
-        "R0lGOD",
-      )
+      base64.startsWith("R0lGOD")
     ) {
       return "image/gif";
     }
@@ -795,8 +573,7 @@ export default function HomePage() {
       );
 
     if (
-      cleanBase64.length <
-      500
+      cleanBase64.length < 500
     ) {
       return null;
     }
@@ -834,8 +611,7 @@ export default function HomePage() {
     }
 
     if (
-      typeof value ===
-      "string"
+      typeof value === "string"
     ) {
       const normalizedImage =
         normalizeImageDataUri(
@@ -851,15 +627,13 @@ export default function HomePage() {
 
       /*
         Activepieces หรือ API Route
-        อาจส่ง JSON ซ้อนเป็น String
+        อาจส่ง JSON ซ้อนเป็น string
       */
       if (
         trimmedValue.startsWith(
           "{",
         ) ||
-        trimmedValue.startsWith(
-          "[",
-        )
+        trimmedValue.startsWith("[")
       ) {
         try {
           const parsedValue =
@@ -898,8 +672,7 @@ export default function HomePage() {
     }
 
     if (
-      typeof value ===
-      "object"
+      typeof value === "object"
     ) {
       const record =
         value as Record<
@@ -908,12 +681,12 @@ export default function HomePage() {
         >;
 
       /*
-        รูปแบบมาตรฐาน Gemini:
+        รูปแบบมาตรฐานของ Gemini:
 
         {
           inlineData: {
             mimeType: "image/png",
-            data: "BASE64"
+            data: "..."
           }
         }
       */
@@ -956,21 +729,15 @@ export default function HomePage() {
               "image/png";
 
         if (
-          imageData.length >
-          500
+          imageData.length > 500
         ) {
           return `data:${mimeType};base64,${imageData}`;
         }
       }
 
       /*
-        บางระบบส่ง File URL ผ่าน:
-
-        {
-          fileData: {
-            fileUri: "https://..."
-          }
-        }
+        บางระบบใช้ชื่อ:
+        fileData / file_data
       */
       const fileData =
         record.fileData ??
@@ -1044,9 +811,7 @@ export default function HomePage() {
       for (
         const key of preferredKeys
       ) {
-        if (
-          !(key in record)
-        ) {
+        if (!(key in record)) {
           continue;
         }
 
@@ -1062,8 +827,8 @@ export default function HomePage() {
       }
 
       /*
-        Fallback:
-        ค้นทุก Property
+        เผื่อ Activepieces ครอบ
+        response ด้วย field อื่น
       */
       for (
         const nestedValue of
@@ -1084,10 +849,6 @@ export default function HomePage() {
     return null;
   }
 
-  // ==================================================
-  // ERROR HELPERS
-  // ==================================================
-
   function stringifyUnknown(
     value: unknown,
     maxLength = 3000,
@@ -1097,14 +858,9 @@ export default function HomePage() {
         value,
         null,
         2,
-      ).slice(
-        0,
-        maxLength,
-      );
+      ).slice(0, maxLength);
     } catch {
-      return String(
-        value,
-      ).slice(
+      return String(value).slice(
         0,
         maxLength,
       );
@@ -1122,8 +878,7 @@ export default function HomePage() {
     }
 
     if (
-      typeof value ===
-      "string"
+      typeof value === "string"
     ) {
       return value;
     }
@@ -1133,10 +888,6 @@ export default function HomePage() {
       2000,
     );
   }
-
-  // ==================================================
-  // GENERATE / EDIT
-  // ==================================================
 
   async function handleGenerate() {
     if (
@@ -1150,6 +901,18 @@ export default function HomePage() {
       sessionId ||
       getOrCreateSessionId();
 
+    /*
+      เก็บภาพเดิมไว้ก่อนส่ง request
+      ห้าม setResultImage(null)
+      เพราะต้องใช้แก้ไขรอบต่อไป
+    */
+    const previousImage =
+      resultImage ??
+      (await loadSessionImage(
+        activeSessionId,
+      ).catch(() => null)) ??
+      "";
+
     setSessionId(
       activeSessionId,
     );
@@ -1159,38 +922,8 @@ export default function HomePage() {
     setProgressMessage("");
 
     try {
-      /*
-        ใช้ resultImage จาก State ก่อน
-
-        ถ้า State ไม่มี เช่น:
-        - รีเฟรชหน้าเว็บ
-        - เปิดแท็บใหม่
-        - Component ถูกสร้างใหม่
-
-        ให้ดึงจาก IndexedDB
-      */
-      let previousImage =
-        resultImage ?? "";
-
-      if (!previousImage) {
-        setProgressMessage(
-          "กำลังโหลดรูปจาก Session...",
-        );
-
-        previousImage =
-          (await loadSessionImage(
-            activeSessionId,
-          )) ?? "";
-
-        if (previousImage) {
-          setResultImage(
-            previousImage,
-          );
-        }
-      }
-
-      let encodedFiles:
-        string[] = [];
+      let encodedFiles: string[] =
+        [];
 
       if (
         images.length > 0
@@ -1211,15 +944,12 @@ export default function HomePage() {
       }
 
       /*
-        เริ่มงานใหม่:
-
-        ไม่มี previousImage
-        ต้องมีอย่างน้อย 2 รูป
+        เริ่มห้องใหม่:
+        ต้องมีรูปอย่างน้อย 2 รูป
       */
       if (
         !previousImage &&
-        encodedFiles.length <
-        2
+        encodedFiles.length < 2
       ) {
         throw new Error(
           [
@@ -1231,15 +961,12 @@ export default function HomePage() {
       }
 
       /*
-        แก้ไขงานเดิม:
-
-        มี previousImage แล้ว
+        รอบแก้ไข:
         ต้องมีข้อความหรือรูปใหม่
       */
       if (
         previousImage &&
-        encodedFiles.length ===
-        0 &&
+        encodedFiles.length === 0 &&
         message.trim().length ===
         0
       ) {
@@ -1247,27 +974,6 @@ export default function HomePage() {
           "กรุณาพิมพ์คำสั่งแก้ไข หรืออัปโหลดรูปเฟอร์นิเจอร์เพิ่ม",
         );
       }
-
-      console.log(
-        "[browser] Generate request",
-        {
-          sessionId:
-            activeSessionId,
-
-          message:
-            message.trim(),
-
-          fileCount:
-            encodedFiles.length,
-
-          hasPreviousImage:
-            previousImage.length >
-            0,
-
-          previousImageLength:
-            previousImage.length,
-        },
-      );
 
       setProgressMessage(
         "กำลังส่งข้อมูลเข้า Workflow...",
@@ -1282,25 +988,22 @@ export default function HomePage() {
             headers: {
               "Content-Type":
                 "application/json",
-
               Accept:
                 "application/json",
             },
 
-            body: JSON.stringify(
-              {
-                sessionId:
-                  activeSessionId,
+            body: JSON.stringify({
+              sessionId:
+                activeSessionId,
 
-                message:
-                  message.trim(),
+              message:
+                message.trim(),
 
-                files:
-                  encodedFiles,
+              files:
+                encodedFiles,
 
-                previousImage,
-              },
-            ),
+              previousImage,
+            }),
           },
         );
 
@@ -1328,7 +1031,7 @@ export default function HomePage() {
           ) as GenerateApiResponse;
       } catch {
         console.error(
-          "[browser] Non-JSON API response",
+          "Non-JSON API response:",
           responseText,
         );
 
@@ -1344,12 +1047,12 @@ export default function HomePage() {
       }
 
       console.log(
-        "[browser] FULL API RESULT",
+        "FULL API RESULT:",
         result,
       );
 
       /*
-        ตรวจสอบ Object ว่าง
+        ตรวจ object ว่าง {}
       */
       const isEmptyResult =
         result &&
@@ -1363,17 +1066,15 @@ export default function HomePage() {
         throw new Error(
           [
             "Activepieces ตอบกลับมาเป็น object ว่าง {}",
-            "หน้าเว็บและ API Route ทำงานแล้ว",
-            "แต่ Return Response ของ Flow ยังไม่ได้ส่ง Output จาก Gemini กลับมา",
-            "ให้ตั้ง Body ของ Return Response เป็น Output ของ HTTP Request Gemini หรือค่า Image จาก Extract Image Step",
+            "หน้าเว็บและ API Route ทำงานแล้ว แต่ Return Response ของ Flow ยังไม่ได้ส่ง Output จาก Gemini กลับมา",
+            "ให้ตั้ง Body ของ Return Response เป็น Output ของ HTTP Request Gemini หรือค่า image จาก Extract Image Step",
           ].join("\n"),
         );
       }
 
       if (
         !response.ok ||
-        result.success ===
-        false
+        result.success === false
       ) {
         const details =
           getErrorDetails(
@@ -1384,7 +1085,6 @@ export default function HomePage() {
           [
             result.error ??
             `Workflow ทำงานไม่สำเร็จ สถานะ ${response.status}`,
-
             details,
           ]
             .filter(Boolean)
@@ -1409,7 +1109,7 @@ export default function HomePage() {
           );
 
         console.error(
-          "[browser] ไม่พบรูปใน Workflow response",
+          "ไม่พบรูปใน Workflow response:",
           result,
         );
 
@@ -1422,53 +1122,28 @@ export default function HomePage() {
         );
       }
 
-      /*
-        อัปเดตรูปบนหน้าเว็บ
-      */
       setResultImage(
         generatedImage,
       );
 
-      /*
-        บันทึกรูปล่าสุดลง IndexedDB
-
-        รอบถัดไปจะส่งรูปนี้กลับไปเป็น
-        previousImage โดยอัตโนมัติ
-      */
       try {
         await saveSessionImage(
           activeSessionId,
           generatedImage,
         );
-
-        console.log(
-          "[browser] Latest image saved",
-          {
-            sessionId:
-              activeSessionId,
-
-            imageLength:
-              generatedImage.length,
-          },
-        );
       } catch (saveError) {
         console.error(
-          "[browser] Save latest image error",
+          "Save latest image error:",
           saveError,
         );
 
-        setError(
-          "สร้างภาพสำเร็จ แต่ไม่สามารถบันทึกรูปไว้ใน Browser ได้ กรุณาอย่าเพิ่งรีเฟรชหน้าเว็บ",
+        throw new Error(
+          "สร้างรูปสำเร็จ แต่เบราว์เซอร์ไม่สามารถเก็บรูปไว้สำหรับแก้ไขรอบถัดไปได้",
         );
       }
 
       setProgressMessage("");
 
-      /*
-        ล้างเฉพาะรูปที่เพิ่งอัปโหลด
-
-        ห้ามล้าง resultImage
-      */
       images.forEach(
         (image) => {
           URL.revokeObjectURL(
@@ -1479,9 +1154,11 @@ export default function HomePage() {
 
       setImages([]);
       setMessage("");
-    } catch (generateError) {
+    } catch (
+    generateError
+    ) {
       console.error(
-        "[browser] Generate error",
+        "Generate error:",
         generateError,
       );
 
@@ -1495,20 +1172,13 @@ export default function HomePage() {
       setProgressMessage("");
 
       /*
-        สำคัญ:
-        ถ้าแก้ไขล้มเหลว
-        ห้ามล้าง resultImage
-
-        เพื่อให้ยังแก้ไขจากรูปเดิมได้
+        ไม่ล้าง resultImage
+        ถ้ารอบแก้ไขล้มเหลว
       */
     } finally {
       setIsGenerating(false);
     }
   }
-
-  // ==================================================
-  // UI
-  // ==================================================
 
   return (
     <main className="min-h-screen bg-slate-100 p-4 md:p-8">
@@ -1534,12 +1204,11 @@ export default function HomePage() {
 
           <button
             type="button"
-            onClick={() => {
-              void handleNewSession();
-            }}
+            onClick={
+              handleNewSession
+            }
             disabled={
-              isGenerating ||
-              isSessionLoading
+              isGenerating
             }
             className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -1548,10 +1217,6 @@ export default function HomePage() {
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
-          {/* ===================================== */}
-          {/* INPUT PANEL */}
-          {/* ===================================== */}
-
           <section className="rounded-3xl bg-white p-5 shadow-sm">
             <div>
               <h2 className="text-xl font-semibold text-slate-900">
@@ -1580,11 +1245,16 @@ export default function HomePage() {
                 </span>
 
                 <span className="mt-3 font-medium text-slate-800">
-                  เลือกรูปแปลน ห้อง หรือเฟอร์นิเจอร์
+                  เลือกรูปแปลน
+                  ห้อง
+                  หรือเฟอร์นิเจอร์
                 </span>
 
                 <span className="mt-1 text-sm text-slate-500">
-                  รองรับ JPG, PNG และ WEBP ไม่เกิน 10 MB ต่อรูป
+                  รองรับ JPG,
+                  PNG และ WEBP
+                  ไม่เกิน 10 MB
+                  ต่อรูป
                 </span>
 
                 <input
@@ -1592,8 +1262,7 @@ export default function HomePage() {
                   accept="image/jpeg,image/png,image/webp"
                   multiple
                   disabled={
-                    isGenerating ||
-                    isSessionLoading
+                    isGenerating
                   }
                   className="hidden"
                   onChange={
@@ -1603,22 +1272,13 @@ export default function HomePage() {
               </label>
             </div>
 
-            {!resultImage &&
-              !isSessionLoading && (
-                <p className="mt-2 text-xs leading-5 text-slate-500">
-                  การเริ่มห้องใหม่ต้องอัปโหลดอย่างน้อย
-                  2 รูป:
-                  รูปห้องหรือแบบแปลน
-                  และรูปเฟอร์นิเจอร์
-                </p>
-              )}
-
-            {resultImage && (
-              <div className="mt-3 rounded-xl bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-700">
-                ระบบมีรูปผลลัพธ์ล่าสุดของ Session นี้แล้ว
-                สามารถพิมพ์คำสั่งแก้ไขอย่างเดียวได้
-                โดยไม่ต้องอัปโหลดรูปเดิมซ้ำ
-              </div>
+            {!resultImage && (
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                การเริ่มห้องใหม่ต้องอัปโหลดอย่างน้อย
+                2 รูป:
+                รูปห้องหรือแบบแปลน
+                และรูปเฟอร์นิเจอร์
+              </p>
             )}
 
             {images.length >
@@ -1675,7 +1335,8 @@ export default function HomePage() {
                           <div className="absolute inset-x-0 bottom-0 bg-black/60 px-2 py-1">
                             <p className="truncate text-xs text-white">
                               {
-                                image.file
+                                image
+                                  .file
                                   .name
                               }
                             </p>
@@ -1699,8 +1360,7 @@ export default function HomePage() {
                 id="instruction"
                 value={message}
                 disabled={
-                  isGenerating ||
-                  isSessionLoading
+                  isGenerating
                 }
                 onChange={(
                   event,
@@ -1711,21 +1371,17 @@ export default function HomePage() {
                   )
                 }
                 rows={6}
-                placeholder={
-                  resultImage
-                    ? "ตัวอย่าง: ลบตู้ด้านบนออก หรือย้ายโซฟาไปทางขวา"
-                    : "ตัวอย่าง: สร้างห้องนั่งเล่นสไตล์ Modern Luxury และวางโซฟาชิดผนังด้านตะวันตก"
-                }
+                placeholder="ตัวอย่าง: สร้างห้องนั่งเล่นสไตล์ Modern Luxury และวางโซฟาชิดผนังด้านตะวันตก"
                 className="mt-2 w-full resize-none rounded-2xl border border-slate-300 px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100"
               />
 
               {resultImage && (
                 <p className="mt-2 text-xs leading-5 text-slate-500">
-                  พิมพ์คำสั่งใหม่
+                  สามารถพิมพ์คำสั่งใหม่
                   หรืออัปโหลดเฟอร์นิเจอร์เพิ่ม
                   แล้วกดแก้ไขได้
-                  ระบบจะส่งรูปผลลัพธ์ล่าสุดกลับไปให้
-                  AI อัตโนมัติ
+                  ระบบจะใช้ภาพเดิมจาก
+                  Session นี้
                 </p>
               )}
             </div>
@@ -1739,27 +1395,22 @@ export default function HomePage() {
             <button
               type="button"
               disabled={
-                !canGenerate
+                !canGenerate ||
+                isGenerating
               }
-              onClick={() => {
-                void handleGenerate();
-              }}
+              onClick={
+                handleGenerate
+              }
               className="mt-5 w-full rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {isSessionLoading
-                ? "กำลังโหลด Session..."
-                : isGenerating
-                  ? progressMessage ||
-                  "กำลังสร้างภาพ..."
-                  : resultImage
-                    ? "แก้ไขการออกแบบ"
-                    : "สร้างการออกแบบ"}
+              {isGenerating
+                ? progressMessage ||
+                "กำลังสร้างภาพ..."
+                : resultImage
+                  ? "แก้ไขการออกแบบ"
+                  : "สร้างการออกแบบ"}
             </button>
           </section>
-
-          {/* ===================================== */}
-          {/* RESULT PANEL */}
-          {/* ===================================== */}
 
           <section className="flex min-h-[620px] flex-col rounded-3xl bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-4">
@@ -1769,7 +1420,9 @@ export default function HomePage() {
                 </h2>
 
                 <p className="mt-1 text-sm text-slate-500">
-                  ภาพ Top View และ Front View จะแสดงตรงนี้
+                  ภาพ Top View
+                  และ Front View
+                  จะแสดงตรงนี้
                 </p>
               </div>
 
@@ -1787,19 +1440,7 @@ export default function HomePage() {
             </div>
 
             <div className="mt-5 flex flex-1 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-              {isSessionLoading ? (
-                <div className="px-6 text-center">
-                  <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
-
-                  <p className="mt-4 font-medium text-slate-700">
-                    กำลังโหลด Session
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    กำลังตรวจสอบรูปผลลัพธ์ล่าสุด
-                  </p>
-                </div>
-              ) : isGenerating ? (
+              {isGenerating ? (
                 <div className="px-6 text-center">
                   <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
 
