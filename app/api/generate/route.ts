@@ -5,6 +5,7 @@ type GenerateRequestBody = {
     message?: unknown;
     files?: unknown;
     previousImage?: unknown;
+    viewMode?: unknown;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -491,6 +492,10 @@ export async function POST(
             requestBody.previousImage,
         );
 
+        const viewMode = getSafeString(
+            requestBody.viewMode,
+        );
+
         if (!sessionId) {
             return NextResponse.json(
                 {
@@ -528,6 +533,7 @@ export async function POST(
                 hasMessage: message.length > 0,
                 hasPreviousImage:
                     previousImage.length > 0,
+                viewMode,
             },
         );
 
@@ -545,6 +551,7 @@ export async function POST(
                     message,
                     files,
                     previousImage,
+                    viewMode,
                 }),
                 cache: "no-store",
                 signal: AbortSignal.timeout(

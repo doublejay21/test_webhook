@@ -1,11 +1,7 @@
 "use client";
 
-import {
-  ChangeEvent,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ReactCompareSlider, ReactCompareSliderImage } from 'react-compare-slider';
 
 export type ChatEntry = {
   id: string;
@@ -241,6 +237,94 @@ export default function HomePage() {
   const [error, setError] =
     useState("");
 
+  
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+  const [viewMode, setViewMode] = useState<"split" | "front" | "top">("split");
+  const [isDragging, setIsDragging] = useState(false);
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+  const [showCompare, setShowCompare] = useState(false);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+
+
+  
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      // Mock event to reuse handleFilesChange
+      const mockEvent = {
+        target: {
+          files: e.dataTransfer.files,
+          value: ""
+        }
+      } as unknown as ChangeEvent<HTMLInputElement>;
+      handleFilesChange(mockEvent);
+    }
+  };
+
+  const handleDownloadImage = async (url: string, filename: string) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      console.error('Download failed', e);
+      // Fallback
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  const downloadAllImages = async () => {
+    const imagesToDownload = chatHistory
+      .filter(entry => entry.role === 'assistant' && entry.resultImage)
+      .map(entry => entry.resultImage as string);
+      
+    if (imagesToDownload.length === 0) {
+      alert('ไม่มีรูปภาพสำหรับดาวน์โหลด');
+      return;
+    }
+    
+    for (let i = 0; i < imagesToDownload.length; i++) {
+      const link = document.createElement('a');
+      link.href = imagesToDownload[i];
+      link.download = `design-result-${i+1}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      await new Promise(r => setTimeout(r, 300));
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -276,6 +360,26 @@ export default function HomePage() {
       cancelled = true;
     };
   }, []);
+
+  
+  const loadingMessages = [
+    "กำลังวิเคราะห์โครงสร้างห้อง...",
+    "กำลังประมวลผลคำสั่ง...",
+    "กำลังจัดวางเฟอร์นิเจอร์...",
+    "กำลังปรับแสงและเงา...",
+    "กำลังเรนเดอร์ภาพความละเอียดสูง..."
+  ];
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isGenerating) {
+      setLoadingMessageIndex(0);
+      interval = setInterval(() => {
+        setLoadingMessageIndex((prev) => (prev + 1) % loadingMessages.length);
+      }, 3500);
+    }
+    return () => clearInterval(interval);
+  }, [isGenerating]);
 
   useEffect(() => {
     return () => {
@@ -896,6 +1000,12 @@ export default function HomePage() {
     );
   }
 
+
+
+  function printChatHistory() {
+    window.print();
+  }
+
   async function handleGenerate() {
     if (
       !canGenerate ||
@@ -986,14 +1096,14 @@ export default function HomePage() {
       setProgressMessage(
         "กำลังส่งข้อมูลเข้า Workflow...",
       );
-      
+
       const userEntry: ChatEntry = {
         id: crypto.randomUUID(),
         role: "user",
         text: message.trim(),
         images: images.map(img => img.previewUrl),
       };
-      
+
       const aiGeneratingEntry: ChatEntry = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -1001,8 +1111,8 @@ export default function HomePage() {
       };
 
       setChatHistory(prev => [...prev, userEntry, aiGeneratingEntry]);
-      
-      
+
+
 
       const response =
         await fetch(
@@ -1028,6 +1138,7 @@ export default function HomePage() {
                 encodedFiles,
 
               previousImage,
+              viewMode,
             }),
           },
         );
@@ -1169,7 +1280,7 @@ export default function HomePage() {
           isGenerating: false,
           resultImage: generatedImage,
         } as ChatEntry];
-        
+
         await saveSessionHistory(
           activeSessionId,
           newHistoryToSave,
@@ -1224,11 +1335,11 @@ export default function HomePage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 p-4 md:p-8">
+    <main className="min-h-screen bg-transparent p-4 md:p-8">
       <div className="mx-auto max-w-7xl">
-        <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between print:hidden">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-600">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-purple-600">
               AI Interior Designer
             </p>
 
@@ -1245,7 +1356,8 @@ export default function HomePage() {
             </p>
           </div>
 
-          <button
+          <div className="flex items-center gap-3 print:hidden">
+            <button
             type="button"
             onClick={
               handleNewSession
@@ -1253,14 +1365,15 @@ export default function HomePage() {
             disabled={
               isGenerating
             }
-            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl border border-slate-300 bg-white/80 backdrop-blur px-4 py-2 text-sm font-medium text-slate-700 transition-all duration-300 hover:bg-slate-50 hover:shadow-sm active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             เริ่มห้องใหม่
           </button>
+          </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
-          <section className="rounded-3xl bg-white p-5 shadow-sm">
+        <div className="grid gap-6 lg:grid-cols-[420px_1fr] print:block">
+          <section className="rounded-3xl bg-white/70 backdrop-blur-sm border border-white/60 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all duration-300">
             <div>
               <h2 className="text-xl font-semibold text-slate-900">
                 ข้อมูลสำหรับสร้างห้อง
@@ -1282,7 +1395,7 @@ export default function HomePage() {
                 อัปโหลดรูป
               </label>
 
-              <label className="mt-2 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 px-6 py-10 text-center transition hover:border-indigo-400 hover:bg-indigo-50">
+              <label className="mt-2 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-white/50 px-6 py-10 text-center transition-all duration-300 hover:border-pink-300 hover:bg-pink-50/80 hover:shadow-[0_0_20px_rgba(236,72,153,0.15)]">
                 <span className="text-4xl">
                   🖼️
                 </span>
@@ -1349,7 +1462,7 @@ export default function HomePage() {
                           }
                           className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
                         >
-                          <img
+                                                      <img
                             src={
                               image.previewUrl
                             }
@@ -1423,7 +1536,7 @@ export default function HomePage() {
                 }}
                 rows={6}
                 placeholder="ตัวอย่าง: สร้างห้องนั่งเล่นสไตล์ Modern Luxury และวางโซฟาชิดผนังด้านตะวันตก"
-                className="mt-2 w-full resize-none rounded-2xl border border-slate-300 px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 disabled:bg-slate-100"
+                className="mt-2 w-full resize-none rounded-2xl border border-slate-300 bg-white/70 backdrop-blur-sm px-4 py-3 text-slate-900 outline-none transition-all duration-300 placeholder:text-slate-400:text-slate-500 focus:border-pink-400 focus:ring-4 focus:ring-pink-500/20 focus:bg-white:bg-slate-900 disabled:bg-slate-100/50:bg-slate-800/50"
               />
 
               {chatHistory.length > 0 && (
@@ -1443,6 +1556,26 @@ export default function HomePage() {
               </div>
             )}
 
+            <div className="mt-4 print:hidden">
+              <label className="block text-sm font-medium text-slate-700 mb-2">มุมมองที่ต้องการ (View Mode)</label>
+              <div className="relative">
+                <select 
+                  value={viewMode} 
+                  onChange={(e) => setViewMode(e.target.value as "split" | "front" | "top")}
+                  className="w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 outline-none transition-all duration-300 focus:border-pink-400 focus:ring-4 focus:ring-pink-500/20 shadow-sm cursor-pointer"
+                >
+                  <option value="top">top view</option>
+                  <option value="front">front view</option>
+                  <option value="split">top view front view</option>
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400">
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
+                  </svg>
+                </div>
+              </div>
+            </div>
+
             <button
               type="button"
               disabled={
@@ -1452,18 +1585,17 @@ export default function HomePage() {
               onClick={
                 handleGenerate
               }
-              className="mt-5 w-full rounded-2xl bg-indigo-600 px-5 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="mt-5 w-full rounded-2xl bg-gradient-to-r from-purple-500 to-pink-500 px-5 py-3.5 font-semibold text-white transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_8px_30px_rgb(168,85,247,0.3)] active:scale-[0.98] disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-300 disabled:hover:scale-100 disabled:hover:shadow-none"
             >
               {isGenerating
-                ? progressMessage ||
-                "กำลังสร้างภาพ..."
+                ? loadingMessages[loadingMessageIndex]
                 : chatHistory.length > 0
                   ? "แก้ไขการออกแบบ"
                   : "สร้างการออกแบบ"}
             </button>
           </section>
 
-          <section className="flex min-h-[620px] max-h-[85vh] flex-col rounded-3xl bg-white p-5 shadow-sm overflow-hidden">
+          <section className="flex min-h-[620px] max-h-[85vh] flex-col rounded-3xl bg-white/70 backdrop-blur-sm border border-white/60 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden transition-all duration-300 print:max-h-none print:overflow-visible print:border-none print:shadow-none print:bg-transparent">
             <div className="flex items-center justify-between gap-4 shrink-0 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-xl font-semibold text-slate-900">
@@ -1473,9 +1605,28 @@ export default function HomePage() {
                   ประวัติคำสั่งและภาพผลลัพธ์
                 </p>
               </div>
+
+              {chatHistory.length > 0 && (
+                <button
+                  type="button"
+                  onClick={printChatHistory}
+                  className="rounded-xl border border-slate-300 bg-white/80 backdrop-blur px-4 py-2 text-sm font-medium text-slate-700 transition-all duration-300 hover:bg-slate-50 hover:shadow-sm active:scale-95 print:hidden"
+                >
+                  🖨️ บันทึกเป็น PDF
+                </button>
+              )}
+              {chatHistory.length > 0 && (
+                <button
+                  type="button"
+                  onClick={downloadAllImages}
+                  className="rounded-xl border border-slate-300 bg-white/80 backdrop-blur px-4 py-2 text-sm font-medium text-slate-700 transition-all duration-300 hover:bg-slate-50:bg-slate-700 hover:shadow-sm active:scale-95 print:hidden"
+                >
+                  ⬇️ โหลดรูปทั้งหมด
+                </button>
+              )}
             </div>
 
-            <div className="flex-1 overflow-y-auto mt-4 pr-2 flex flex-col gap-6 scroll-smooth">
+            <div className="flex-1 overflow-y-auto mt-4 pr-2 flex flex-col gap-6 scroll-smooth print:overflow-visible">
               {chatHistory.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-sm px-6 text-center">
@@ -1488,20 +1639,20 @@ export default function HomePage() {
                 </div>
               ) : (
                 chatHistory.map((entry) => (
-                  <div key={entry.id} className={`flex ${entry.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[85%] rounded-2xl p-4 ${entry.role === "user" ? "bg-indigo-50 rounded-tr-sm" : "bg-white border border-slate-200 shadow-sm rounded-tl-sm"}`}>
-                      
+                  <div key={entry.id} className={`flex animate-slide-up ${entry.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[85%] rounded-2xl p-4 transition-all ${entry.role === "user" ? "bg-indigo-50/80 backdrop-blur-sm border border-indigo-100 rounded-tr-sm shadow-sm" : "bg-white/80 backdrop-blur-sm border border-slate-200 shadow-sm rounded-tl-sm hover:shadow-md"}`}>
+
                       {entry.role === "assistant" && (
                         <div className="flex items-center gap-2 mb-2">
                           <span className="text-lg">🤖</span>
                           <span className="font-semibold text-slate-700 text-sm">AI Designer</span>
                         </div>
                       )}
-                      
+
                       {entry.role === "user" && entry.text && (
                         <p className="text-slate-800 whitespace-pre-wrap">{entry.text}</p>
                       )}
-                      
+
                       {entry.role === "user" && entry.images && entry.images.length > 0 && (
                         <div className="flex flex-wrap gap-2 mt-3">
                           {entry.images.map((img, i) => (
@@ -1533,7 +1684,7 @@ export default function HomePage() {
                           </div>
                         </div>
                       )}
-                      
+
                     </div>
                   </div>
                 ))
@@ -1542,6 +1693,45 @@ export default function HomePage() {
           </section>
         </div>
       </div>
+
+      {/* Lightbox Modal */}
+      
+  {/* Toast Notification */}
+  {toast && (
+    <div className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-lg border transition-all animate-in slide-in-from-top-10 fade-in duration-300 ${toast.type === 'success' ? 'bg-white border-green-100 text-green-700' : 'bg-red-50 border-red-100 text-red-600'}`}>
+      <div className="flex items-center gap-2 font-medium text-sm">
+        {toast.type === 'success' ? (
+          <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+        ) : (
+          <svg className="w-5 h-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        )}
+        {toast.message}
+      </div>
+    </div>
+  )}
+
+
+      {lightboxImage && (
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 print:hidden opacity-0 animate-[slideUpFade_0.2s_ease-out_forwards]"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div className="relative max-h-full max-w-full flex items-center justify-center">
+            <button 
+              className="absolute -top-12 right-0 text-white hover:text-slate-300 text-4xl font-bold p-2 transition-transform hover:scale-110"
+              onClick={() => setLightboxImage(null)}
+            >
+              &times;
+            </button>
+            <img 
+              src={lightboxImage} 
+              alt="Expanded view" 
+              className="max-h-[90vh] max-w-full rounded-2xl object-contain shadow-2xl ring-1 ring-white/10" 
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        </div>
+      )}
     </main>
   );
 }
